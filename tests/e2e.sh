@@ -66,7 +66,8 @@ echo "$OUT"
 # Antigravity 在 Windows 透過 cmd /c 執行
 AGY_PAYLOAD='{"model":{"display_name":"Gemini"},"context_window":{"used_percentage":7},"quota":{"gemini-weekly":{"remaining_fraction":0.5,"reset_in_seconds":3600}}}'
 if [ "$WINDOWS" = 1 ]; then
-  OUT=$(printf '%s' "$AGY_PAYLOAD" | MSYS_NO_PATHCONV=1 cmd //d //s //c "$AGY_CMD")
+  # MSYS_NO_PATHCONV 讓 Git Bash 不改寫 /c 等參數與 Windows 路徑
+  OUT=$(printf '%s' "$AGY_PAYLOAD" | MSYS_NO_PATHCONV=1 cmd /d /c "$AGY_CMD")
 else
   OUT=$(printf '%s' "$AGY_PAYLOAD" | sh -c "$AGY_CMD")
 fi
