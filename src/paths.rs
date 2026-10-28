@@ -59,20 +59,22 @@ fn quote(s: &str) -> String {
 
 /// 組出 statusLine 要執行的指令，例如 `/home/me/.tokenbar/bin/tokenbar render claude`。
 ///
-/// - Windows 一律改用正斜線：Claude Code 在 Windows 透過 Git Bash 執行指令，反斜線會被當成跳脫字元。
-/// - Antigravity 在 Windows 用 `cmd /c` 執行；指令含兩個以上引號時 cmd 會剝掉最外層的一對，
-///   所以整段再包一層引號抵銷。
+/// Windows 上兩個 CLI 執行指令的方式不同，路徑寫法也不同：
+///
+/// - Claude Code 透過 Git Bash 執行：反斜線會被當成跳脫字元，所以改用正斜線。
+/// - Antigravity 透過 `cmd /c` 執行：正斜線會被當成選項開頭（`C:/Users/...` 會被拆開），
+///   所以保留反斜線。另外指令含兩個以上引號時 cmd 會剝掉最外層的一對，所以整段再包一層引號抵銷。
 pub fn status_command(exe: &Path, agent: &str, platform: Platform) -> String {
     let mut exe = exe.to_string_lossy().into_owned();
+    let via_cmd = platform == Platform::Windows && agent == "antigravity";
     if platform == Platform::Windows {
-        exe = exe.trim_start_matches(r"\\?\").replace('\\', "/");
+        exe = exe.trim_start_matches(r"\\?\").to_owned();
+        if !via_cmd {
+            exe = exe.replace('\\', "/");
+        }
     }
     let command = format!("{} render {agent}", quote(&exe));
-    if platform == Platform::Windows && agent == "antigravity" && command.contains('"') {
-        format!("\"{command}\"")
-    } else {
-        command
-    }
+    if via_cmd && command.contains('"') { format!("\"{command}\"") } else { command }
 }
 
 #[cfg(test)]
@@ -91,11 +93,20 @@ mod tests {
     }
 
     #[test]
-    fn windows_command_uses_forward_slashes() {
+    fn windows_claude_uses_forward_slashes_for_git_bash() {
         let exe = Path::new(r"C:\Users\me\.tokenbar\bin\tokenbar.exe");
         assert_eq!(
             status_command(exe, "claude", Platform::Windows),
             "C:/Users/me/.tokenbar/bin/tokenbar.exe render claude"
+        );
+    }
+
+    #[test]
+    fn windows_antigravity_keeps_backslashes_for_cmd() {
+        let exe = Path::new(r"C:\Users\RUNNER~1\.tokenbar\bin\tokenbar.exe");
+        assert_eq!(
+            status_command(exe, "antigravity", Platform::Windows),
+            r"C:\Users\RUNNER~1\.tokenbar\bin\tokenbar.exe render antigravity"
         );
     }
 
@@ -108,7 +119,7 @@ mod tests {
         );
         assert_eq!(
             status_command(exe, "antigravity", Platform::Windows),
-            "\"\"C:/Users/John Doe/.tokenbar/bin/tokenbar.exe\" render antigravity\""
+            r#"""C:\Users\John Doe\.tokenbar\bin\tokenbar.exe" render antigravity""#
         );
     }
 }

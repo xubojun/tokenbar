@@ -52,8 +52,8 @@ fn main() -> ExitCode {
         "uninstall" => uninstall_cmd(rest),
         "preview" => preview_cmd(),
         "update" => match rest {
-            [] => update::update(false),
-            [flag] if flag == "--check" => update::update(true),
+            [] => update::update(false, &installed_agents(&Paths::from_env())),
+            [flag] if flag == "--check" => update::update(true, &[]),
             _ => Err("update 只支援 --check".into()),
         },
         "-V" | "--version" | "version" => {
@@ -180,6 +180,27 @@ fn detected(agent: Agent, p: &Paths) -> bool {
         Agent::Antigravity => (p.antigravity_settings.parent().map(Path::to_path_buf), "agy"),
     };
     dir.is_some_and(|d| d.is_dir()) || on_path(bin)
+}
+
+/// 目前已寫入 TokenBar 設定的 agent。
+fn installed_agents(p: &Paths) -> Vec<&'static str> {
+    let ours = |file: &Path| {
+        std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|v| install::json_settings::is_ours(v.get("statusLine")))
+    };
+    let mut agents = Vec::new();
+    if ours(&p.claude_settings) {
+        agents.push(Agent::Claude.key());
+    }
+    if install::state::read(&p.state_dir).contains_key(Agent::Codex.key()) {
+        agents.push(Agent::Codex.key());
+    }
+    if ours(&p.antigravity_settings) {
+        agents.push(Agent::Antigravity.key());
+    }
+    agents
 }
 
 fn parse_agents(args: &[String]) -> Result<Vec<Agent>, String> {

@@ -81,7 +81,9 @@ pub fn remove_leftovers() {
     }
 }
 
-pub fn update(check_only: bool) -> Result<(), String> {
+/// `installed`：目前已寫入 TokenBar 設定的 agent，更新後用新版重新寫入一次，
+/// 讓指令格式的修正（例如 Windows 路徑寫法）也一併生效。
+pub fn update(check_only: bool, installed: &[&str]) -> Result<(), String> {
     let current = env!("CARGO_PKG_VERSION");
     let tag = latest_tag()?;
     let latest = parse_version(&tag).ok_or_else(|| format!("無法解析版本號 {tag}"))?;
@@ -119,6 +121,13 @@ pub fn update(check_only: bool) -> Result<(), String> {
         });
     }
     remove_leftovers();
+    if !installed.is_empty() {
+        println!("\n用新版重新寫入設定：");
+        let refreshed = Command::new(&exe).arg("install").args(installed).status();
+        if !refreshed.is_ok_and(|s| s.success()) {
+            println!("重新寫入設定失敗，請手動執行 tokenbar install");
+        }
+    }
     println!("\n✔ 已更新到 {}，重新啟動各 CLI 後生效。", tag.trim_start_matches('v'));
     Ok(())
 }

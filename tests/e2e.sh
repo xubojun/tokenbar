@@ -47,7 +47,8 @@ TB="$H/.tokenbar/bin/$EXE"
 "$TB" install claude codex antigravity > /dev/null # 重複安裝不能覆蓋記下的原始設定
 pass "install（兩次）"
 
-command_of() { sed -n 's/^ *"command": "\(.*\)",\{0,1\}$/\1/p' "$1"; }
+# 取出 statusLine.command 並還原 JSON 的反斜線跳脫（Windows 路徑）
+command_of() { sed -n 's/^ *"command": "\(.*\)",\{0,1\}$/\1/p' "$1" | sed 's/\\\\/\\/g'; }
 CLAUDE_CMD=$(command_of "$H/.claude/settings.json")
 AGY_CMD=$(command_of "$H/.gemini/antigravity-cli/settings.json")
 [[ "$CLAUDE_CMD" == *"render claude" ]] || fail "Claude 指令不正確：$CLAUDE_CMD"
