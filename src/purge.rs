@@ -2,7 +2,7 @@
 //!
 //! 一鍵安裝腳本（由 dist 產生）會做三件事，這裡逐一還原：
 //! 1. 把執行檔放進 `~/.tokenbar/bin`
-//! 2. 把該目錄加進 PATH：Unix 在 shell 設定檔加一行 `. "$HOME/.tokenbar/bin/env"`；
+//! 2. 把該目錄加進 PATH：Unix 在 shell 設定檔加一行 `. "$HOME/.config/tokenbar/env.sh"`；
 //!    Windows 寫進 `HKCU\Environment` 的 Path
 //! 3. 寫一份安裝紀錄（receipt）到 `~/.config/tokenbar` 或 `%LOCALAPPDATA%\tokenbar`
 
@@ -16,10 +16,18 @@ use crate::paths::{Paths, home_dir};
 /// 安裝腳本可能寫入 PATH 設定的 shell 設定檔（相對於家目錄）。
 const RC_FILES: [&str; 6] = [".profile", ".bashrc", ".bash_profile", ".bash_login", ".zshrc", ".zshenv"];
 
-/// 是否為安裝腳本加入的那一行，例如 `. "$HOME/.tokenbar/bin/env"` 或 `source "$HOME/.tokenbar/bin/env"`。
+/// 是否為安裝腳本加入的那一行。依安裝環境不同，可能是下列任一種（`.` 也可能寫成 `source`）：
+///
+/// ```text
+/// . "$HOME/.config/tokenbar/env.sh"        ← 一般情況（env 腳本放在安裝紀錄目錄）
+/// . "$XDG_CONFIG_HOME/tokenbar/env.sh"
+/// . "$HOME/.tokenbar/bin/env"              ← 舊版安裝腳本
+/// ```
 fn is_path_line(line: &str) -> bool {
     let line = line.trim();
-    (line.starts_with(". ") || line.starts_with("source ")) && line.contains(".tokenbar/bin/env")
+    let Some(target) = line.strip_prefix(". ").or_else(|| line.strip_prefix("source ")) else { return false };
+    let target = target.trim().trim_matches(|c| c == '"' || c == '\'');
+    target.ends_with("/tokenbar/env.sh") || target.ends_with("/.tokenbar/bin/env")
 }
 
 /// 移除 rc 檔內容中 TokenBar 加入的 PATH 行（連同安裝腳本在它前面補的空行）。
@@ -133,10 +141,22 @@ mod tests {
         assert_eq!(strip_path_lines(zsh).unwrap(), "");
     }
 
+    /// v0.1.0 安裝腳本實際寫入的內容
+    #[test]
+    fn strips_config_dir_env_script() {
+        let profile = "export A=1\n\n. \"$HOME/.config/tokenbar/env.sh\"\n";
+        assert_eq!(strip_path_lines(profile).unwrap(), "export A=1\n");
+        let created = "\n. \"$HOME/.config/tokenbar/env.sh\"\n";
+        assert_eq!(strip_path_lines(created).unwrap(), "");
+        assert!(strip_path_lines("source '/home/me/.config/tokenbar/env.sh'\n").is_some());
+        assert!(strip_path_lines(". \"$XDG_CONFIG_HOME/tokenbar/env.sh\"\n").is_some());
+    }
+
     #[test]
     fn leaves_unrelated_files_alone() {
         assert_eq!(strip_path_lines(". \"$HOME/.cargo/env\"\n"), None);
         assert_eq!(strip_path_lines("# .tokenbar/bin/env 只是註解\n"), None);
+        assert_eq!(strip_path_lines(". \"$HOME/.config/othertokenbar/env.sh.bak\"\n"), None);
     }
 
     #[test]

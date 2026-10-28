@@ -228,7 +228,7 @@ tokenbar uninstall --purge
    - 安裝前用的是別的狀態列工具，就還原成它
    - 安裝前沒有狀態列，就把設定移除
 2. 從 PATH 移除 `~/.tokenbar/bin`
-   - Linux / macOS：刪掉 `.profile`、`.bashrc`、`.zshrc` 等檔案裡安裝腳本加的那一行
+   - Linux / macOS：刪掉 `.profile`、`.bashrc`、`.zshrc` 等檔案裡安裝腳本加的那一行，以及 fish 的設定檔
    - Windows：從使用者 PATH 移除
 3. 刪除安裝紀錄、`~/.tokenbar` 目錄與執行檔
 
@@ -243,7 +243,7 @@ tokenbar uninstall codex
 1. 刪掉 `~/.claude/settings.json` 和 `~/.gemini/antigravity-cli/settings.json` 中的 `statusLine`。也可以直接用同目錄下的 `settings.json.tokenbar-bak` 覆蓋回去，但要注意：這份備份是**最後一次執行 `tokenbar install` 時**的內容，之後對設定檔的其他修改會一併被蓋掉。
 2. 刪掉 `~/.codex/config.toml` 中 `[tui] status_line` 加入的三個項目
 3. 刪除 `~/.tokenbar` 目錄
-4. 刪除 shell 設定檔中的 `. "$HOME/.tokenbar/bin/env"`（Windows 則從使用者 PATH 移除該目錄）
+4. 刪除 `~/.config/tokenbar` 目錄，以及 `.profile`、`.bashrc`、`.zshrc` 中的 `. "$HOME/.config/tokenbar/env.sh"` 這一行（fish 則刪除 `~/.config/fish/conf.d/tokenbar.env.fish`；Windows 從使用者 PATH 移除 `%USERPROFILE%\.tokenbar\bin`）
 
 ## 安裝時改了什麼
 
