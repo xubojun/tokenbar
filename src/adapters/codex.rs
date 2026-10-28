@@ -2,6 +2,10 @@
 //!
 //! Codex 的狀態列不能執行外部指令，所以 `tokenbar codex` 從 session 紀錄讀取最新的
 //! `token_count` 事件，在獨立視窗或 tmux 狀態列顯示。
+//!
+//! context 使用率的算法與 Codex 一致：取 `last_token_usage.total_tokens`，分子分母都先扣掉
+//! 12,000 個基礎 tokens。參見 openai/codex 的 `codex-rs/protocol/src/protocol.rs`
+//! （`percent_of_context_window_remaining`）與 `codex-rs/tui/src/chatwidget.rs`。
 
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
@@ -11,6 +15,7 @@ use serde_json::Value;
 
 use super::{get, get_f64, get_i64, get_str};
 use crate::status::{Limit, Status};
+use crate::timeutil;
 
 /// Codex 計算 context 使用率時會扣掉固定的基礎提示詞用量；沿用同樣算法，
 /// 讓數字與 Codex 內建的 `context-used` 一致。
@@ -22,7 +27,12 @@ const MAX_FILES: usize = 50;
 pub struct Session {
     pub meta: Option<Value>,
     pub turn_context: Option<Value>,
+    /// 最新的 token_count 事件（context 使用率）
     pub token_count: Option<Value>,
+    /// 最新一筆有值的 rate_limits。最新的 token_count 不一定帶額度資料，所以分開找。
+    pub rate_limits: Option<Value>,
+    /// 最新 token_count 事件的時間（Unix 秒）
+    pub updated_at: Option<i64>,
 }
 
 pub fn window_label(minutes: i64) -> String {
@@ -45,12 +55,13 @@ pub fn context_used_pct(tokens: f64, window: f64) -> f64 {
 pub fn from_session(session: &Session, now: i64) -> Status {
     let empty = Value::Null;
     let tc = session.token_count.as_ref().unwrap_or(&empty);
+    let rl = session.rate_limits.as_ref().unwrap_or(&empty);
 
     let mut windows = Vec::new();
     for key in ["primary", "secondary"] {
-        let Some(used) = get_f64(tc, &["rate_limits", key, "used_percent"]) else { continue };
-        let minutes = get_i64(tc, &["rate_limits", key, "window_minutes"]);
-        let resets_at = get_i64(tc, &["rate_limits", key, "resets_at"]);
+        let Some(used) = get_f64(rl, &[key, "used_percent"]) else { continue };
+        let minutes = get_i64(rl, &[key, "window_minutes"]);
+        let resets_at = get_i64(rl, &[key, "resets_at"]);
         // 紀錄裡的數字可能已經過了重置時間，此時視為已歸零。
         let expired = resets_at.is_some_and(|at| at <= now);
         windows.push((
@@ -59,6 +70,7 @@ pub fn from_session(session: &Session, now: i64) -> Status {
                 label: minutes.map_or_else(|| "?".into(), window_label),
                 used_pct: if expired { 0.0 } else { used },
                 resets_at: if expired { None } else { resets_at },
+                window_secs: minutes.map(|m| m * 60),
             },
         ));
     }
@@ -78,6 +90,7 @@ pub fn from_session(session: &Session, now: i64) -> Status {
         context,
         limits: windows.into_iter().map(|(_, l)| l).collect(),
         width: None,
+        updated_at: session.updated_at,
     }
 }
 
@@ -140,7 +153,7 @@ fn read_tail(file: &Path) -> Option<String> {
     Some(if start > 0 { text.split_once('\n').map_or(String::new(), |(_, rest)| rest.to_owned()) } else { text })
 }
 
-/// 解析一個 rollout 檔，取出 session_meta 與最新的 turn_context、token_count。
+/// 解析一個 rollout 檔，取出 session_meta 與最新的 turn_context、token_count、rate_limits。
 pub fn read_session(file: &Path) -> Session {
     let meta = read_first_line(file)
         .filter(|v| v.get("type").and_then(Value::as_str) == Some("session_meta"))
@@ -149,24 +162,31 @@ pub fn read_session(file: &Path) -> Session {
 
     let Some(tail) = read_tail(file) else { return session };
     for line in tail.lines().rev() {
-        if session.turn_context.is_some() && session.token_count.is_some() {
+        if session.turn_context.is_some() && session.token_count.is_some() && session.rate_limits.is_some() {
             break;
         }
         // 先用字串篩選，避免逐行解析整個大檔
-        let is_turn = session.turn_context.is_none() && line.contains("\"turn_context\"");
-        let is_count = session.token_count.is_none() && line.contains("\"token_count\"");
-        if !is_turn && !is_count {
+        let want_turn = session.turn_context.is_none() && line.contains("\"turn_context\"");
+        let want_count =
+            (session.token_count.is_none() || session.rate_limits.is_none()) && line.contains("\"token_count\"");
+        if !want_turn && !want_count {
             continue;
         }
         let Ok(entry) = serde_json::from_str::<Value>(line) else { continue };
         let kind = entry.get("type").and_then(Value::as_str);
-        if is_turn && kind == Some("turn_context") {
+        if want_turn && kind == Some("turn_context") {
             session.turn_context = entry.get("payload").cloned();
-        } else if is_count
+        } else if want_count
             && kind == Some("event_msg")
             && get_str(&entry, &["payload", "type"]).as_deref() == Some("token_count")
         {
-            session.token_count = get(&entry, &["payload"]).cloned();
+            if session.token_count.is_none() {
+                session.token_count = get(&entry, &["payload"]).cloned();
+                session.updated_at = get_str(&entry, &["timestamp"]).and_then(|t| timeutil::parse_rfc3339(&t));
+            }
+            if session.rate_limits.is_none() {
+                session.rate_limits = get(&entry, &["payload", "rate_limits"]).cloned();
+            }
         }
     }
     session
@@ -224,14 +244,19 @@ mod tests {
         })
     }
 
+    fn rate_limits(primary: Value, secondary: Value) -> Option<Value> {
+        Some(json!({ "primary": primary, "secondary": secondary }))
+    }
+
     #[test]
     fn sorts_windows_and_drops_expired() {
         let session = Session {
             turn_context: Some(json!({ "model": "gpt-6.1", "cwd": "/w/app" })),
-            token_count: Some(token_count(
+            token_count: Some(token_count(Value::Null, Value::Null)),
+            rate_limits: rate_limits(
                 json!({ "used_percent": 40.0, "window_minutes": 10080, "resets_at": 5000 }),
                 json!({ "used_percent": 90.0, "window_minutes": 300, "resets_at": 500 }),
-            )),
+            ),
             ..Default::default()
         };
         let status = from_session(&session, 1000);
@@ -240,8 +265,8 @@ mod tests {
         assert_eq!(
             status.limits,
             vec![
-                Limit { label: "5h".into(), used_pct: 0.0, resets_at: None },
-                Limit { label: "7d".into(), used_pct: 40.0, resets_at: Some(5000) },
+                Limit { label: "5h".into(), used_pct: 0.0, resets_at: None, window_secs: Some(18000) },
+                Limit { label: "7d".into(), used_pct: 40.0, resets_at: Some(5000), window_secs: Some(604800) },
             ]
         );
     }
@@ -258,6 +283,16 @@ mod tests {
             json!({ "type": "event_msg", "payload": token_count(json!({ "used_percent": 1.0 }), Value::Null) }),
             json!({ "type": "turn_context", "payload": { "model": "gpt-6.1" } }),
             json!({ "type": "event_msg", "payload": token_count(json!({ "used_percent": 7.0, "window_minutes": 10080 }), Value::Null) }),
+            // 最新一筆沒有額度資料：context 用這筆，額度沿用上一筆
+            json!({
+                "timestamp": "2026-10-28T06:39:33.291Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": { "last_token_usage": { "total_tokens": 12000 }, "model_context_window": 272000 },
+                    "rate_limits": null
+                }
+            }),
             json!({ "type": "response_item", "payload": { "type": "message" } }),
         ];
         for line in lines {
@@ -270,6 +305,8 @@ mod tests {
         assert_eq!(status.model.as_deref(), Some("gpt-6.1"));
         assert_eq!(status.cwd.as_deref(), Some("/w/app"));
         assert_eq!(status.limits[0].used_pct, 7.0);
+        assert_eq!(status.context, Some(0.0));
+        assert_eq!(status.updated_at, timeutil::parse_rfc3339("2026-10-28T06:39:33Z"));
         assert!(find_latest(home.path(), Some(Path::new("/elsewhere"))).is_none());
     }
 }

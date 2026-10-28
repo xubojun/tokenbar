@@ -4,7 +4,7 @@
 use serde_json::Value;
 
 use super::{first_str, get, get_f64, get_i64, get_str};
-use crate::status::{Limit, Status};
+use crate::status::{Limit, Status, window_for_label};
 
 pub fn from_payload(payload: &Value) -> Status {
     let mut limits = Vec::new();
@@ -14,6 +14,7 @@ pub fn from_payload(payload: &Value) -> Status {
                 label: label.into(),
                 used_pct,
                 resets_at: get_i64(payload, &["rate_limits", key, "resets_at"]),
+                window_secs: window_for_label(label),
             });
         }
     }
@@ -27,6 +28,7 @@ pub fn from_payload(payload: &Value) -> Status {
             .map(|_| get_f64(payload, &["context_window", "used_percentage"]).unwrap_or(0.0)),
         limits,
         width: None,
+        updated_at: None,
     }
 }
 
@@ -52,7 +54,10 @@ mod tests {
         assert_eq!(status.cwd.as_deref(), Some("/w/app"));
         assert_eq!(status.context, Some(8.0));
         assert_eq!(status.limits.len(), 2);
-        assert_eq!(status.limits[0], Limit { label: "5h".into(), used_pct: 23.5, resets_at: Some(1738425600) });
+        assert_eq!(
+            status.limits[0],
+            Limit { label: "5h".into(), used_pct: 23.5, resets_at: Some(1738425600), window_secs: Some(18000) }
+        );
         assert_eq!(status.limits[1].label, "7d");
     }
 

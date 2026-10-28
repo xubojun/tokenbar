@@ -6,6 +6,7 @@ mod purge;
 mod render;
 mod status;
 mod timeutil;
+mod update;
 
 use std::env;
 use std::io::{self, IsTerminal, Read, Write};
@@ -29,6 +30,8 @@ TokenBar — Claude Code / Codex CLI / Antigravity CLI 的用量狀態列
       --watch                      持續更新
       --interval <秒>              更新間隔，預設 2
       --cwd <目錄>                 只看在此目錄啟動的 session
+  tokenbar update                  更新到最新版本
+      --check                      只檢查是否有新版本
   tokenbar render <claude|antigravity>
                                    從 stdin 讀取 JSON 並輸出狀態列（由各 CLI 呼叫）
   tokenbar preview                 用範例資料預覽
@@ -48,6 +51,11 @@ fn main() -> ExitCode {
         "install" => install_cmd(rest),
         "uninstall" => uninstall_cmd(rest),
         "preview" => preview_cmd(),
+        "update" => match rest {
+            [] => update::update(false),
+            [flag] if flag == "--check" => update::update(true),
+            _ => Err("update 只支援 --check".into()),
+        },
         "-V" | "--version" | "version" => {
             println!("tokenbar {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -71,9 +79,10 @@ fn color_enabled(forced_off: bool) -> bool {
     !forced_off && env::var_os("NO_COLOR").is_none_or(|v| v.is_empty())
 }
 
-fn print_status(status: &Status, color: bool) {
-    let git = status.cwd.as_deref().and_then(|cwd| git::read(Path::new(cwd)));
-    println!("{}", render::render(status, git.as_ref(), color, timeutil::now()));
+fn render_status(status: &Status, color: bool) -> String {
+    let cache = Paths::from_env().state_dir.join("cache");
+    let git = status.cwd.as_deref().and_then(|cwd| git::read(Path::new(cwd), &cache));
+    render::render(status, git.as_ref(), color, timeutil::now())
 }
 
 /// 由各 CLI 頻繁呼叫：不論輸入為何都輸出內容並以 0 結束，
@@ -91,7 +100,7 @@ fn render_cmd(args: &[String]) -> ExitCode {
             return ExitCode::SUCCESS;
         }
     };
-    print_status(&status, color_enabled(false));
+    println!("{}", render_status(&status, color_enabled(false)));
     ExitCode::SUCCESS
 }
 
@@ -114,27 +123,43 @@ fn codex_cmd(args: &[String]) -> Result<(), String> {
         }
     }
     let home = Paths::from_env().codex_home;
-    let color = color_enabled(no_color) && (watch || io::stdout().is_terminal());
+    let color = color_enabled(no_color) && io::stdout().is_terminal();
+    let mut drawn_lines = 0;
 
     loop {
         let found = adapters::codex::find_latest(&home, cwd.as_deref());
-        if watch {
-            print!("\x1b[2J\x1b[H");
-        }
-        match &found {
+        let text = match &found {
             Some(session) => {
                 let mut status = adapters::codex::from_session(session, timeutil::now());
-                status.width = env::var("COLUMNS").ok().and_then(|c| c.parse().ok());
-                print_status(&status, color);
+                status.width = terminal_width();
+                render_status(&status, color)
             }
-            None => println!("找不到 Codex session（{}）", home.join("sessions").display()),
-        }
+            None if cwd.is_some() => "找不到在這個目錄啟動的 Codex session".to_string(),
+            None => format!("找不到 Codex session（{}）", home.join("sessions").display()),
+        };
         if !watch {
+            println!("{text}");
             return if found.is_some() { Ok(()) } else { Err("沒有可顯示的資料".into()) };
         }
-        let _ = io::stdout().flush();
+
+        // 只重畫自己上次輸出的那幾行，不清除整個畫面
+        let mut out = io::stdout().lock();
+        if drawn_lines > 0 {
+            let _ = write!(out, "\x1b[{drawn_lines}F\x1b[J");
+        }
+        let _ = writeln!(out, "{text}");
+        let _ = out.flush();
+        drawn_lines = text.lines().count();
         thread::sleep(Duration::from_secs_f64(interval.max(0.5)));
     }
+}
+
+/// 終端機寬度：優先用 COLUMNS，其次查詢實際的終端機。
+fn terminal_width() -> Option<usize> {
+    env::var("COLUMNS")
+        .ok()
+        .and_then(|c| c.parse().ok())
+        .or_else(|| terminal_size::terminal_size().map(|(w, _)| usize::from(w.0)))
 }
 
 /// 在 PATH 上找得到這個指令嗎（Windows 會試 PATHEXT 的副檔名）。
@@ -175,6 +200,7 @@ fn install_cmd(args: &[String]) -> Result<(), String> {
         }
     }
     let exe = env::current_exe().map_err(|e| format!("找不到 tokenbar 執行檔位置：{e}"))?;
+    update::remove_leftovers();
 
     let mut failed = false;
     for agent in agents {

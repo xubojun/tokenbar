@@ -14,7 +14,7 @@
 use serde_json::Value;
 
 use super::{first_str, get, get_f64, get_i64, get_str};
-use crate::status::{Limit, Status};
+use crate::status::{Limit, Status, window_for_label};
 use crate::timeutil;
 
 const ORDER: [&str; 3] = ["5h", "1d", "7d"];
@@ -53,7 +53,9 @@ fn quota_limits(quota: &serde_json::Map<String, Value>, model: Option<&str>, now
         let resets_at = get_str(bucket, &["reset_time"])
             .and_then(|t| timeutil::parse_rfc3339(&t))
             .or_else(|| get_i64(bucket, &["reset_in_seconds"]).map(|s| now + s));
-        all.push((id.as_str(), Limit { label: bucket_label(id), used_pct: (1.0 - remaining) * 100.0, resets_at }));
+        let label = bucket_label(id);
+        let window_secs = window_for_label(&label);
+        all.push((id.as_str(), Limit { label, used_pct: (1.0 - remaining) * 100.0, resets_at, window_secs }));
     }
 
     // 有目前模型那一家的 bucket 就只看那一家；沒有就全部一起比較。
@@ -90,6 +92,7 @@ pub fn from_payload(payload: &Value, now: i64) -> Status {
             .map(|_| get_f64(payload, &["context_window", "used_percentage"]).unwrap_or(0.0)),
         limits,
         width: get_i64(payload, &["terminal_width"]).and_then(|w| usize::try_from(w).ok()),
+        updated_at: None,
     }
 }
 
@@ -130,8 +133,8 @@ mod tests {
         assert_eq!(
             status.limits,
             vec![
-                Limit { label: "5h".into(), used_pct: 50.0, resets_at: Some(1_600) },
-                Limit { label: "7d".into(), used_pct: 25.0, resets_at: Some(1_783_324_232) },
+                Limit { label: "5h".into(), used_pct: 50.0, resets_at: Some(1_600), window_secs: Some(18000) },
+                Limit { label: "7d".into(), used_pct: 25.0, resets_at: Some(1_783_324_232), window_secs: Some(604800) },
             ]
         );
     }

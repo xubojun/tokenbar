@@ -1,0 +1,70 @@
+# 每次發布完成後，在三個平台上照 README 的一鍵安裝指令實際安裝、使用與移除。
+name: Installer smoke test
+
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  unix:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    name: installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: 一鍵安裝（README 原文）
+        run: |
+          mkdir -p ~/.claude
+          curl -fsSL https://github.com/xubojun/tokenbar/releases/latest/download/tokenbar-installer.sh | sh && ~/.tokenbar/bin/tokenbar install claude
+      - name: 新 shell 可直接使用並產生狀態列
+        shell: bash -l {0}
+        run: |
+          tokenbar --version
+          echo '{"model":{"display_name":"Opus 5.5"},"context_window":{"used_percentage":42}}' | NO_COLOR=1 tokenbar render claude | tee out.txt
+          grep -q "42%" out.txt
+      - name: 一鍵移除
+        shell: bash -l {0}
+        run: |
+          tokenbar uninstall --purge
+          test ! -e ~/.tokenbar
+          ! grep -rq "tokenbar/env" ~/.profile ~/.bashrc ~/.bash_profile ~/.zshrc 2>/dev/null
+          ! grep -q statusLine ~/.claude/settings.json
+
+  windows:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    name: installer (windows-latest, ${{ matrix.shell }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [cmd, pwsh]
+    steps:
+      - name: 準備 Claude Code 設定目錄
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force (Join-Path $HOME '.claude') | Out-Null
+      - name: 一鍵安裝（README 原文）
+        shell: ${{ matrix.shell }}
+        run: |
+          powershell -ExecutionPolicy Bypass -c "irm https://github.com/xubojun/tokenbar/releases/latest/download/tokenbar-installer.ps1 | iex; & (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.tokenbar\bin\tokenbar.exe') install claude"
+      - name: 產生狀態列並移除
+        shell: pwsh
+        run: |
+          $tb = Join-Path $HOME '.tokenbar\bin\tokenbar.exe'
+          & $tb --version
+          $env:NO_COLOR = '1'
+          $out = '{"model":{"display_name":"Opus 5.5"},"context_window":{"used_percentage":42}}' | & $tb render claude
+          $out
+          if (-not ($out -match '42%')) { throw '狀態列輸出不正確' }
+          $path = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not ($path -match 'tokenbar')) { throw '安裝後使用者 PATH 沒有 tokenbar' }
+          & $tb uninstall --purge
+          Start-Sleep -Seconds 3
+          if (Test-Path (Join-Path $HOME '.tokenbar')) { throw '~/.tokenbar 未刪除' }
+          $path = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if ($path -match 'tokenbar') { throw "使用者 PATH 仍有 tokenbar：$path" }
+          if ((Get-Content (Join-Path $HOME '.claude\settings.json') -Raw) -match 'statusLine') { throw 'statusLine 未移除' }

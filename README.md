@@ -4,7 +4,7 @@
 
 ```text
 Opus 5.5 │ high │ my-project │ main ↑2 ●3 ?1
-ctx ███▊░░░░░░  38% │ 5h ██████▋░░░  66% ↻ 1h 46m │ 7d █████▊░░░░  58% ↻ 2d 12h
+ctx ███▊░░░░░░  38% │ 5h ██████▋░░░  66% ↻ 1h 46m +1% │ 7d █████▊░░░░  58% ↻ 2d 12h -6%
 ```
 
 - **快**：Rust 原生執行檔，每次刷新約 3 ms（其中約 2 ms 是 `git status`），比用 shell 腳本解析 JSON 快十倍以上
@@ -113,6 +113,8 @@ curl -fsSL https://github.com/xubojun/tokenbar/releases/download/v0.1.0/tokenbar
 | `tokenbar uninstall --purge` | 還原全部設定並移除 tokenbar 本身 |
 | `tokenbar codex` | 顯示最新 Codex session 的用量 |
 | `tokenbar codex --watch` | 持續更新 |
+| `tokenbar update` | 更新到最新版本 |
+| `tokenbar update --check` | 只檢查是否有新版本 |
 | `tokenbar preview` | 用範例資料預覽外觀 |
 | `tokenbar --version` | 顯示版本 |
 | `tokenbar --help` | 顯示說明 |
@@ -154,7 +156,12 @@ Codex 的狀態列**不能執行外部程式**，只能從內建項目挑選。�
 tokenbar codex --watch
 ```
 
-它會讀取 `~/.codex/sessions` 裡最新的 session 紀錄，每 2 秒更新一次。其他選項：
+它會讀取 `~/.codex/sessions` 裡最新的 session 紀錄，每 2 秒在原地重畫自己那兩行。
+
+- 最新一筆紀錄沒有額度資料時，會沿用最近一筆有額度資料的紀錄
+- 紀錄超過一分鐘沒更新時，第一行會標示資料時間，例如 `3m 前`
+
+請在**另一個終端機分頁**執行，不要在 Codex 裡面執行。其他選項：
 
 ```sh
 tokenbar codex --watch --interval 5       # 每 5 秒更新
@@ -172,7 +179,7 @@ set -g status-interval 5
 
 ```text
 Opus 5.5 │ high │ my-project │ main ↑2 ↓1 ●3 ?1
-ctx ███▊░░░░░░  38% │ 5h ██████▋░░░  66% ↻ 1h 46m │ 7d █████▊░░░░  58% ↻ 2d 12h
+ctx ███▊░░░░░░  38% │ 5h ██████▋░░░  66% ↻ 1h 46m +1% │ 7d █████▊░░░░  58% ↻ 2d 12h -6%
 ```
 
 **第一行**
@@ -195,14 +202,30 @@ ctx ███▊░░░░░░  38% │ 5h ██████▋░░░  6
 | `5h` | 5 小時額度使用率 |
 | `7d` | 每週額度使用率 |
 | `↻ 1h 46m` | 距離額度重置的時間 |
+| `+7%` / `-6%` | 用量速度（見下方說明） |
 
 **顏色**：綠色低於 60%，黃色 60%–85%，紅色 85% 以上。
 
-終端機太窄時，會先拿掉重置時間，再把用量條縮短。
+**用量速度**：已用掉的額度，減去這個時間窗已經過的時間比例。
+
+- `+7%`：用得比時間快 7 個百分點，照這個速度會在重置前用完。超前 15 個百分點以上變紅色，其餘超前為黃色。
+- `-6%`：比時間慢，還有餘裕，綠色。
+- 剛好同步時不顯示。
+
+例如 7 天的額度已經過了 3.5 天（50%），而你用了 56%，就會顯示 `+6%`。
+
+終端機太窄時，會先拿掉重置時間與用量速度，再把用量條縮短。
 
 ## 更新
 
-重新執行[安裝](#安裝)的那一行即可。新的執行檔會覆蓋舊的，各 CLI 的設定指向同一個位置，不需要重新設定。
+```sh
+tokenbar update           # 更新到最新版本
+tokenbar update --check   # 只檢查，不更新
+```
+
+`update` 會下載並執行該版本的官方安裝腳本，替換 `~/.tokenbar/bin` 裡的執行檔。各 CLI 的設定指向同一個位置，不需要重新設定，重新啟動各 CLI 即可。
+
+v0.1.1 以前的版本沒有 `update` 指令，請重新執行[安裝](#安裝)的那一行。
 
 ## 移除
 
@@ -251,10 +274,11 @@ tokenbar 只動狀態列這一個設定，其他內容與順序都保持原樣�
 
 | 檔案 | 修改內容 | 備份 |
 |---|---|---|
-| `~/.claude/settings.json` | `statusLine` | `settings.json.tokenbar-bak` |
+| `~/.claude/settings.json` | `statusLine`（含每 60 秒自動刷新的 `refreshInterval`，讓閒置時倒數也會更新） | `settings.json.tokenbar-bak` |
 | `~/.gemini/antigravity-cli/settings.json` | `statusLine` | `settings.json.tokenbar-bak` |
 | `~/.codex/config.toml` | `[tui] status_line` | `config.toml.tokenbar-bak` |
 | `~/.tokenbar/state.json` | 記錄安裝前的狀態列，供移除時還原 | — |
+| `~/.tokenbar/cache/` | 各目錄 `git status` 結果的短期快取 | — |
 
 安全措施：
 
@@ -287,6 +311,10 @@ tokenbar 只動狀態列這一個設定，其他內容與順序都保持原樣�
 
 `tokenbar codex` 預設看最新的 session。同時開多個時，用 `--cwd` 指定目錄。
 
+**git 分支有時沒有顯示**
+
+`git status` 超過 1 秒會被中止，避免拖慢狀態列（Antigravity 超過 5 秒就會中止狀態列指令）。逾時時會沿用 5 分鐘內的舊結果，再舊就不顯示。同一個目錄的結果會快取 2 秒。
+
 **Windows 上狀態列顯示亂碼**
 
 請使用 Windows Terminal。舊版主控台對 Unicode 方塊字元的支援不完整。
@@ -308,7 +336,10 @@ cargo build --release
 cargo test                                  # 單元測試
 cargo clippy --all-targets -- -D warnings   # 靜態檢查
 cargo fmt                                   # 格式化
+tests/e2e.sh target/release/tokenbar        # 端對端測試：在假家目錄裡完整安裝再移除
 ```
+
+CI 會在 Linux、macOS、Windows 上跑以上全部測試。每次發布完成後，還會在三個平台上照 README 的一鍵安裝指令實際安裝、使用與移除一次。
 
 發布流程由 [dist](https://github.com/axodotdev/cargo-dist) 產生：推送 `v*` 標籤後，GitHub Actions 會編譯全部平台並建立 Release 與安裝腳本。
 

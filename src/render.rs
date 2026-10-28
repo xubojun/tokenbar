@@ -2,13 +2,15 @@
 //!
 //! ```text
 //! Opus 5.5 │ high │ my-project │ main ↑2 ●3 ?1
-//! ctx ███▊░░░░░░  38% │ 5h ██████▋░░░  66% ↻ 1h 46m │ 7d █████▊░░░░  58% ↻ 2d 12h
+//! ctx ███▊░░░░░░  38% │ 5h ██████▋░░░  66% ↻ 1h 46m +1% │ 7d █████▊░░░░  58% ↻ 2d 12h -6%
 //! ```
+//!
+//! 重置時間後面的 `+7%`／`-6%` 是用量速度，見 [`Limit::pace`]。
 
 use std::fmt::Write;
 use std::path::Path;
 
-use crate::status::{Git, Status};
+use crate::status::{Git, Limit, Status};
 
 const PARTIALS: [&str; 8] = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
 const SEP: &str = " │ ";
@@ -53,6 +55,17 @@ fn level(pct: f64) -> Style {
     if pct >= 85.0 {
         Style::Red
     } else if pct >= 60.0 {
+        Style::Yellow
+    } else {
+        Style::Green
+    }
+}
+
+/// 用量速度的顏色：用得比時間快 15 個百分點以上紅、快一點黃、沒超前綠。
+fn pace_level(pace: f64) -> Style {
+    if pace >= 15.0 {
+        Style::Red
+    } else if pace > 0.0 {
         Style::Yellow
     } else {
         Style::Green
@@ -104,20 +117,24 @@ struct Layout {
     show_reset: bool,
 }
 
-fn meter(p: &Painter, label: &str, pct: f64, resets_at: Option<i64>, layout: &Layout, now: i64) -> String {
+fn meter(p: &Painter, label: &str, pct: f64, limit: Option<&Limit>, layout: &Layout, now: i64) -> String {
     let mut out = format!(
         "{} {} {:>3}%",
         p.paint(Style::Dim, label),
         p.paint(level(pct), &bar(pct, layout.bar_width)),
         pct.round() as i64
     );
-    if let (true, Some(at)) = (layout.show_reset, resets_at) {
+    let Some(limit) = limit.filter(|_| layout.show_reset) else { return out };
+    if let Some(at) = limit.resets_at {
         let _ = write!(out, " {}", p.paint(Style::Dim, &format!("↻ {}", duration(at - now))));
+    }
+    if let Some(pace) = limit.pace(now).filter(|pace| pace.round() != 0.0) {
+        let _ = write!(out, " {}", p.paint(pace_level(pace), &format!("{:+}%", pace.round() as i64)));
     }
     out
 }
 
-fn header(status: &Status, git: Option<&Git>, p: &Painter) -> String {
+fn header(status: &Status, git: Option<&Git>, p: &Painter, now: i64) -> String {
     let mut parts = Vec::new();
     if let Some(model) = &status.model {
         parts.push(p.paint(Style::Bold, model));
@@ -138,6 +155,10 @@ fn header(status: &Status, git: Option<&Git>, p: &Painter) -> String {
         }
         parts.push(p.paint(Style::Green, &text));
     }
+    // 讀紀錄檔的資料可能是舊的，超過一分鐘就標示
+    if let Some(age) = status.updated_at.map(|t| now - t).filter(|age| *age >= 60) {
+        parts.push(p.paint(Style::Dim, &format!("{} 前", duration(age))));
+    }
     parts.join(SEP)
 }
 
@@ -147,15 +168,15 @@ fn meters(status: &Status, p: &Painter, layout: &Layout, now: i64) -> String {
         segments.push(meter(p, "ctx", ctx, None, layout, now));
     }
     for limit in &status.limits {
-        segments.push(meter(p, &limit.label, limit.used_pct, limit.resets_at, layout, now));
+        segments.push(meter(p, &limit.label, limit.used_pct, Some(limit), layout, now));
     }
     segments.join(SEP)
 }
 
-/// 畫出狀態列。寬度不足時依序：拿掉重置時間 → 縮短用量條。
+/// 畫出狀態列。寬度不足時依序：拿掉重置時間與用量速度 → 縮短用量條。
 pub fn render(status: &Status, git: Option<&Git>, color: bool, now: i64) -> String {
     let p = Painter { color };
-    let head = header(status, git, &p);
+    let head = header(status, git, &p, now);
 
     let layouts = [
         Layout { bar_width: 10, show_reset: true },
@@ -212,10 +233,16 @@ mod tests {
             cwd: Some("/home/me/my-project".into()),
             context: Some(38.0),
             limits: vec![
-                Limit { label: "5h".into(), used_pct: 66.0, resets_at: Some(1000 + 3600 + 46 * 60) },
-                Limit { label: "7d".into(), used_pct: 58.0, resets_at: Some(1000 + 2 * 86400 + 12 * 3600) },
+                Limit { label: "5h".into(), used_pct: 66.0, resets_at: Some(1000 + 3600 + 46 * 60), window_secs: None },
+                Limit {
+                    label: "7d".into(),
+                    used_pct: 58.0,
+                    resets_at: Some(1000 + 2 * 86400 + 12 * 3600),
+                    window_secs: None,
+                },
             ],
             width: None,
+            updated_at: None,
         }
     }
 
@@ -238,6 +265,40 @@ mod tests {
         let meters = out.lines().last().unwrap();
         assert!(visible_len(meters) <= 60, "{meters}");
         assert!(!meters.contains('↻'));
+    }
+
+    #[test]
+    fn shows_pace_and_data_age() {
+        let now = 1_000_000;
+        let week = 7 * 86400;
+        let status = Status {
+            limits: vec![Limit {
+                label: "7d".into(),
+                used_pct: 56.0,
+                resets_at: Some(now + week / 2),
+                window_secs: Some(week),
+            }],
+            model: Some("gpt-6.1".into()),
+            updated_at: Some(now - 180),
+            ..Default::default()
+        };
+        assert_eq!(render(&status, None, false, now), "gpt-6.1 │ 3m 前\n7d █████▋░░░░  56% ↻ 3d 12h +6%");
+    }
+
+    #[test]
+    fn hides_zero_pace_and_fresh_age() {
+        let now = 1_000_000;
+        let status = Status {
+            limits: vec![Limit {
+                label: "5h".into(),
+                used_pct: 50.0,
+                resets_at: Some(now + 9000),
+                window_secs: Some(18000),
+            }],
+            updated_at: Some(now - 5),
+            ..Default::default()
+        };
+        assert_eq!(render(&status, None, false, now), "5h █████░░░░░  50% ↻ 2h 30m");
     }
 
     #[test]

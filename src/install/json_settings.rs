@@ -11,10 +11,13 @@ use super::{Agent, Error, Installed, Removal, Result, state};
 /// 用來辨識「這個 statusLine 是 TokenBar 寫的」。
 const MARKER: &str = " render ";
 
+/// Claude Code 只在有活動時才重跑狀態列；閒置時靠這個間隔（秒）讓重置倒數繼續走。
+pub const CLAUDE_REFRESH_SECS: u64 = 60;
+
 pub fn status_line(agent: Agent, command: &str) -> Value {
     match agent {
         Agent::Antigravity => json!({ "type": "command", "command": command, "enabled": true }),
-        _ => json!({ "type": "command", "command": command, "padding": 0 }),
+        _ => json!({ "type": "command", "command": command, "padding": 0, "refreshInterval": CLAUDE_REFRESH_SECS }),
     }
 }
 
@@ -130,6 +133,7 @@ mod tests {
         let res = install(Agent::Claude, &file, CMD, &dir.path().join("state")).unwrap();
         assert!(res.backup.is_none());
         assert_eq!(read(&file)["statusLine"]["command"], CMD);
+        assert_eq!(read(&file)["statusLine"]["refreshInterval"], 60);
     }
 
     #[test]
