@@ -47,10 +47,15 @@ jobs:
       - name: 準備 Claude Code 設定目錄
         shell: pwsh
         run: New-Item -ItemType Directory -Force (Join-Path $HOME '.claude') | Out-Null
-      - name: 一鍵安裝（README 原文）
-        shell: ${{ matrix.shell }}
-        run: |
-          powershell -ExecutionPolicy Bypass -c "irm https://github.com/xubojun/tokenbar/releases/latest/download/tokenbar-installer.ps1 | iex; & (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.tokenbar\bin\tokenbar.exe') install claude"
+      # 同一行指令分別在 CMD 與 PowerShell 中貼上執行（shell 欄位不支援運算式，只能拆成兩個步驟）
+      - name: 一鍵安裝（README 原文，CMD）
+        if: matrix.shell == 'cmd'
+        shell: cmd
+        run: powershell -ExecutionPolicy Bypass -c "irm https://github.com/xubojun/tokenbar/releases/latest/download/tokenbar-installer.ps1 | iex; & (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.tokenbar\bin\tokenbar.exe') install claude"
+      - name: 一鍵安裝（README 原文，PowerShell）
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -c "irm https://github.com/xubojun/tokenbar/releases/latest/download/tokenbar-installer.ps1 | iex; & (Join-Path ([Environment]::GetFolderPath('UserProfile')) '.tokenbar\bin\tokenbar.exe') install claude"
       - name: 產生狀態列並移除
         shell: pwsh
         run: |
