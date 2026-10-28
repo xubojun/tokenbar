@@ -1,0 +1,31 @@
+[package]
+name = "tokenbar"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "Claude Code、Codex CLI、Antigravity CLI 的用量狀態列：context、5 小時與每週額度一眼看完"
+license = "MIT"
+repository = "https://github.com/xubojun/tokenbar"
+homepage = "https://github.com/xubojun/tokenbar"
+readme = "README.md"
+keywords = ["statusline", "claude-code", "codex", "antigravity", "cli"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+self-replace = "1.5.1"
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+toml_edit = "0.25.17"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: smoke test
+        shell: bash
+        run: |
+          cargo build --release
+          echo '{"model":{"display_name":"Opus 5.5"},"cwd":".","context_window":{"used_percentage":42},"rate_limits":{"five_hour":{"used_percentage":10,"resets_at":4102444800}}}' \
+            | NO_COLOR=1 ./target/release/tokenbar render claude | tee out.txt
+          grep -q "ctx" out.txt && grep -q "42%" out.txt && grep -q "5h" out.txt
